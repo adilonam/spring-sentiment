@@ -119,12 +119,6 @@ yarn-error.log*
 coverage/
 *.lcov
 
-# Application specific - Configuration files
-application*.yml
-application*.properties
-!application.yml.example
-!application.properties.example
-
 
 
 # Kubernetes

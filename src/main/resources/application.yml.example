@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+
+logging:
+  level:
+    "[ma.code212.gateway]": INFO

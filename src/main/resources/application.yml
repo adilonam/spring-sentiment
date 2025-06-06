@@ -41,5 +41,9 @@ logging:
   level:
     "[ma.code212.gateway]": INFO
 
+# External Services Configuration
+external:
+  fastapi:
+    url: ${FASTAPI_URL}
 
 # mvn spring-boot:run

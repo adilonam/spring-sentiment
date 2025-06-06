@@ -38,7 +38,7 @@ import java.util.Map;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/api/v1/fastapi")
+@RequestMapping("/api/fastapi")
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "FastAPI Services", description = "Comment scraping and sentiment analysis services")

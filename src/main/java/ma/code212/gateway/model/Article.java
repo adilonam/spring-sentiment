@@ -34,29 +34,14 @@ public class Article {
     @Column(unique = true, nullable = false, length = 500)
     private String url;
 
-    @Column(length = 100)
-    private String category;
-
-    @Column(name = "publish_date")
-    private LocalDateTime publishDate;
-
-    @Column(length = 255)
-    private String author;
-
-    @Column(name = "scraped_at")
-    private LocalDateTime scrapedAt;
 
     @Column(name = "total_comments")
     @Builder.Default
     private Integer totalComments = 0;
 
-    @CreationTimestamp
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+   @Column(name = "scraped_at")
+    private LocalDateTime scrapedAt;
 
-    @UpdateTimestamp
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
 
     // Relationships
     @OneToMany(mappedBy = "article", cascade = CascadeType.ALL, fetch = FetchType.LAZY)

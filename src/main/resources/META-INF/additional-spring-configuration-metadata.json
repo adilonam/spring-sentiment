@@ -1,0 +1,37 @@
+{"properties": [
+  {
+    "name": "external.fastapi.url",
+    "type": "java.lang.String",
+    "description": "A description for 'external.fastapi.url'"
+  },
+  {
+    "name": "keycloak.realm",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.realm'"
+  },
+  {
+    "name": "keycloak.auth-server-url",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.auth-server-url'"
+  },
+  {
+    "name": "keycloak.resource",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.resource'"
+  },
+  {
+    "name": "keycloak.credentials.secret",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.credentials.secret'"
+  },
+  {
+    "name": "keycloak.use-resource-role-mappings",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.use-resource-role-mappings'"
+  },
+  {
+    "name": "keycloak.bearer-only",
+    "type": "java.lang.String",
+    "description": "A description for 'keycloak.bearer-only'"
+  }
+]}

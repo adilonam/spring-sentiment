@@ -16,9 +16,9 @@ public interface ArticleRepository extends JpaRepository<Article, UUID> {
     
     Optional<Article> findByUrl(String url);
     
+    
     List<Article> findByUser(User user);
     
-    List<Article> findByCategory(String category);
     
     @Query("SELECT a FROM Article a WHERE a.user.id = :userId")
     List<Article> findByUserId(@Param("userId") UUID userId);

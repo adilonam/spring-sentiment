@@ -2,6 +2,7 @@ package ma.code212.gateway.controller;
 
 import ma.code212.gateway.dto.AuthResponse;
 import ma.code212.gateway.dto.LoginRequest;
+import ma.code212.gateway.dto.RefreshTokenRequest;
 import ma.code212.gateway.dto.RegisterRequest;
 import ma.code212.gateway.dto.UserInfo;
 import ma.code212.gateway.service.KeycloakService;
@@ -87,10 +88,10 @@ public class AuthController {
         @ApiResponse(responseCode = "400", description = "Invalid input"),
         @ApiResponse(responseCode = "500", description = "Internal server error")
     })
-    public ResponseEntity<Map<String, Object>> refreshToken(@RequestParam String refreshToken) {
+    public ResponseEntity<Map<String, Object>> refreshToken(@Valid @RequestBody RefreshTokenRequest refreshTokenRequest) {
         log.info("Token refresh attempt");
         
-        AuthResponse authResponse = keycloakService.refreshToken(refreshToken);
+        AuthResponse authResponse = keycloakService.refreshToken(refreshTokenRequest.getRefreshToken());
         
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -102,6 +103,8 @@ public class AuthController {
         
         return ResponseEntity.ok(response);
     }
+
+   
 
     @GetMapping("/health")
     @Operation(summary = "Check authentication service health", description = "Health check endpoint for authentication service")

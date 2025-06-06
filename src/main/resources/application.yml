@@ -26,6 +26,30 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
 
+  # Security and OAuth2 Configuration for Keycloak
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}
+          jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/certs
+      client:
+        registration:
+          keycloak:
+            client-id: ${KEYCLOAK_CLIENT_ID:spring-gateway}
+            client-secret: ${KEYCLOAK_CLIENT_SECRET:your-client-secret}
+            scope: openid,profile,email
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}
+            authorization-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/auth
+            token-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/token
+            user-info-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/userinfo
+            jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/certs
+            user-name-attribute: preferred_username
+
 # Swagger/OpenAPI Configuration
 springdoc:
   api-docs:
@@ -45,5 +69,15 @@ logging:
 external:
   fastapi:
     url: ${FASTAPI_URL}
+
+# Keycloak Configuration
+keycloak:
+  realm: ${KEYCLOAK_REALM:master}
+  auth-server-url: ${KEYCLOAK_URL:http://localhost:8080}
+  resource: ${KEYCLOAK_CLIENT_ID:spring-gateway}
+  credentials:
+    secret: ${KEYCLOAK_CLIENT_SECRET:your-client-secret}
+  use-resource-role-mappings: true
+  bearer-only: true
 
 # mvn spring-boot:run

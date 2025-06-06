@@ -214,35 +214,12 @@ public class FastApiProxyController {
             
             // Extract sentiment analysis data from FastAPI response
             String sentimentStr = responseJson.get("sentiment").asText();
+            double confidenceScore = responseJson.get("confidence_score").asDouble();
             
-            // Parse results array to get individual scores
-            JsonNode resultsArray = responseJson.get("results");
-            double positiveScore = 0.0;
-            double negativeScore = 0.0;
-            double neutralScore = 0.0;
-            double confidenceScore = 0.0;
-            
-            // Extract scores from results array
-            if (resultsArray != null && resultsArray.isArray()) {
-                for (JsonNode result : resultsArray) {
-                    String label = result.get("label").asText().toLowerCase();
-                    double score = result.get("score").asDouble();
-                    
-                    switch (label) {
-                        case "positive":
-                            positiveScore = score;
-                            break;
-                        case "negative":
-                            negativeScore = score;
-                            break;
-                        case "neutral":
-                            neutralScore = score;
-                            break;
-                    }
-                }
-                // Use the highest score as confidence score
-                confidenceScore = Math.max(Math.max(positiveScore, negativeScore), neutralScore);
-            }
+            // Parse individual scores if available
+            double positiveScore = responseJson.has("positive_score") ? responseJson.get("positive_score").asDouble() : 0.0;
+            double negativeScore = responseJson.has("negative_score") ? responseJson.get("negative_score").asDouble() : 0.0;
+            double neutralScore = responseJson.has("neutral_score") ? responseJson.get("neutral_score").asDouble() : 0.0;
             
             // Convert string sentiment to enum
             Sentiment sentiment = Sentiment.valueOf(sentimentStr.toUpperCase());

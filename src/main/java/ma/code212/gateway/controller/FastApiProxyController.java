@@ -2,6 +2,9 @@ package ma.code212.gateway.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,14 +15,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
-import jakarta.servlet.http.HttpServletRequest;
-import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/fastapi")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "FastAPI Proxy", description = "Proxy endpoints that forward requests to FastAPI service")
+@Tag(name = "FastAPI Services", description = "Comment scraping and sentiment analysis services")
 public class FastApiProxyController {
 
     private final RestTemplate restTemplate;
@@ -27,48 +30,80 @@ public class FastApiProxyController {
     @Value("${external.fastapi.url}")
     private String fastApiUrl;
 
-    @RequestMapping(value = "/**", method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.PATCH})
-    @Operation(summary = "FastAPI Proxy", description = "Forwards all requests to FastAPI service")
-    public ResponseEntity<Object> proxyToFastApi(
-            HttpServletRequest request,
-            @RequestBody(required = false) Object body) {
+    // DTO classes for request/response
+    public static class UrlInput {
+        public String url;
         
+        public UrlInput() {}
+        
+        public UrlInput(String url) {
+            this.url = url;
+        }
+    }
+    
+    public static class CommentInput {
+        public String comment;
+        
+        public CommentInput() {}
+        
+        public CommentInput(String comment) {
+            this.comment = comment;
+        }
+    }
+    
+    public static class CommentResponse {
+        public List<String> comments;
+        public int total_comments;
+    }
+    
+    public static class SentimentResult {
+        public List<Map<String, Object>> results;
+        public String sentiment;
+        public double execution_time;
+    }
+
+    @PostMapping("/scrape-comments")
+    @Operation(
+        summary = "Scrape Comments", 
+        description = "Scrapes comments from a given URL using Tor proxy",
+        responses = {
+            @ApiResponse(responseCode = "200", description = "Comments scraped successfully",
+                content = @Content(schema = @Schema(implementation = CommentResponse.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error")
+        }
+    )
+    public ResponseEntity<Object> scrapeComments(@RequestBody UrlInput urlInput) {
+        return proxyToFastApi("/scrape-comments", urlInput, HttpMethod.POST);
+    }
+
+    @PostMapping("/comment-classification")
+    @Operation(
+        summary = "Comment Classification", 
+        description = "Analyzes sentiment of a comment using AI model",
+        responses = {
+            @ApiResponse(responseCode = "200", description = "Sentiment analysis completed successfully",
+                content = @Content(schema = @Schema(implementation = SentimentResult.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error")
+        }
+    )
+    public ResponseEntity<Object> classifyComment(@RequestBody CommentInput commentInput) {
+        return proxyToFastApi("/comment-classification", commentInput, HttpMethod.POST);
+    }
+
+    private ResponseEntity<Object> proxyToFastApi(String endpoint, Object body, HttpMethod httpMethod) {
         try {
-            // Extract the path after /api/v1/fastapi/
-            String requestPath = request.getRequestURI().replaceFirst("/api/v1/fastapi", "");
-            if (requestPath.isEmpty()) {
-                requestPath = "/";
-            }
-            
             // Build the target URL
-            String targetUrl = fastApiUrl + requestPath;
+            String targetUrl = fastApiUrl + endpoint;
             
-            // Add query parameters if they exist
-            String queryString = request.getQueryString();
-            if (queryString != null && !queryString.isEmpty()) {
-                targetUrl += "?" + queryString;
-            }
+            log.info("Proxying {} to FastAPI: {}", httpMethod, targetUrl);
             
-            log.info("Proxying {} {} to FastAPI: {}", request.getMethod(), request.getRequestURI(), targetUrl);
-            
-            // Copy headers from the original request
+            // Create headers
             HttpHeaders headers = new HttpHeaders();
-            Collections.list(request.getHeaderNames()).forEach(headerName -> {
-                // Skip certain headers that shouldn't be forwarded
-                if (!headerName.equalsIgnoreCase("host") && 
-                    !headerName.equalsIgnoreCase("content-length") &&
-                    !headerName.equalsIgnoreCase("connection") &&
-                    !headerName.equalsIgnoreCase("transfer-encoding") &&
-                    !headerName.equalsIgnoreCase("accept-encoding")) {
-                    headers.add(headerName, request.getHeader(headerName));
-                }
-            });
+            headers.add("Content-Type", "application/json");
+            headers.add("Accept", "application/json");
             
             // Create the request entity
             HttpEntity<Object> requestEntity = new HttpEntity<>(body, headers);
-            
-            // Determine the HTTP method
-            HttpMethod httpMethod = HttpMethod.valueOf(request.getMethod());
             
             // Forward the request to FastAPI
             ResponseEntity<String> response = restTemplate.exchange(

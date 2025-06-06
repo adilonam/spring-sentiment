@@ -13,7 +13,7 @@ spring:
   
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: update
     show-sql: false
     properties:
       hibernate:
@@ -31,8 +31,8 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}
-          jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/certs
+          issuer-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}
+          jwk-set-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}/protocol/openid-connect/certs
       client:
         registration:
           keycloak:
@@ -43,11 +43,11 @@ spring:
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
         provider:
           keycloak:
-            issuer-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}
-            authorization-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/auth
-            token-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/token
-            user-info-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/userinfo
-            jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8080}/realms/${KEYCLOAK_REALM:master}/protocol/openid_connect/certs
+            issuer-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}
+            authorization-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}/protocol/openid-connect/auth
+            token-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}/protocol/openid-connect/token
+            user-info-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}/protocol/openid-connect/userinfo
+            jwk-set-uri: ${KEYCLOAK_URL:http://localhost:5050}/realms/${KEYCLOAK_REALM:master}/protocol/openid-connect/certs
             user-name-attribute: preferred_username
 
 # Swagger/OpenAPI Configuration
@@ -73,7 +73,7 @@ external:
 # Keycloak Configuration
 keycloak:
   realm: ${KEYCLOAK_REALM:master}
-  auth-server-url: ${KEYCLOAK_URL:http://localhost:8080}
+  auth-server-url: ${KEYCLOAK_URL:http://localhost:5050}
   resource: ${KEYCLOAK_CLIENT_ID:spring-gateway}
   credentials:
     secret: ${KEYCLOAK_CLIENT_SECRET:your-client-secret}

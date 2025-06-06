@@ -7,6 +7,7 @@ import ma.code212.gateway.dto.RegisterRequest;
 import ma.code212.gateway.dto.UserInfo;
 import ma.code212.gateway.exception.AuthenticationException;
 import ma.code212.gateway.exception.UserRegistrationException;
+import ma.code212.gateway.model.User;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Base64;
+import java.util.Optional;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +37,7 @@ public class KeycloakService {
 
     private final KeycloakConfig keycloakConfig;
     private final WebClient keycloakWebClient;
+    private final UserService userService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${keycloak.resource}")
@@ -44,6 +48,29 @@ public class KeycloakService {
 
     public AuthResponse authenticate(LoginRequest loginRequest) {
         try {
+            // First, check if user exists in local database
+            // Try to find by username first, then by email as fallback
+            Optional<User> localUser = userService.findByUsername(loginRequest.getUsername());
+            
+            if (localUser.isEmpty()) {
+                // Fallback: try to find by email in case username is actually an email
+                localUser = userService.findByEmail(loginRequest.getUsername());
+            }
+            
+            if (localUser.isEmpty()) {
+                // User doesn't exist in local database
+                log.warn("Authentication attempt for non-existent user in local database: {}", loginRequest.getUsername());
+                throw new AuthenticationException("User not found in system. Please contact administrator.");
+            }
+            
+            // Check if user is active
+            if (!localUser.get().getIsActive()) {
+                log.warn("Authentication attempt for inactive user: {}", loginRequest.getUsername());
+                throw new AuthenticationException("User account is inactive");
+            }
+            
+            log.info("User found in local database, proceeding with Keycloak authentication: {}", loginRequest.getUsername());
+
             MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
             formData.add("grant_type", "password");
             formData.add("client_id", clientId);
@@ -63,8 +90,13 @@ public class KeycloakService {
 
             JsonNode jsonNode = objectMapper.readTree(response);
 
+            String accessToken = jsonNode.get("access_token").asText();
+            
+            // Extract user info from token and sync with database
+            extractAndSyncUserFromToken(accessToken);
+
             return AuthResponse.builder()
-                    .accessToken(jsonNode.get("access_token").asText())
+                    .accessToken(accessToken)
                     .tokenType(jsonNode.get("token_type").asText())
                     .expiresIn(jsonNode.get("expires_in").asLong())
                     .refreshToken(jsonNode.has("refresh_token") ? jsonNode.get("refresh_token").asText() : null)
@@ -102,18 +134,39 @@ public class KeycloakService {
             credential.put("temporary", false);
             userPayload.put("credentials", new Object[]{credential});
 
-            // Create user in Keycloak
-            String response = keycloakWebClient
+            log.debug("Creating user in Keycloak with payload: {}", userPayload);
+            
+            // Create user in Keycloak and get Location header
+            String locationHeader = keycloakWebClient
                     .post()
                     .uri(keycloakConfig.getUsersEndpoint())
                     .header("Authorization", "Bearer " + adminToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(userPayload)
                     .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+                    .toBodilessEntity()
+                    .block()
+                    .getHeaders()
+                    .getLocation()
+                    .toString();
+
+            log.debug("User created successfully, location: {}", locationHeader);
+            // Extract Keycloak user ID from Location header (e.g., .../users/{userId})
+            String keycloakUserId = locationHeader.substring(locationHeader.lastIndexOf('/') + 1);
+            
+            log.info("Keycloak user created with ID: {}", keycloakUserId);
+
+            // Create User entity in our database
+            userService.createUser(
+                    registerRequest.getEmail(),
+                    registerRequest.getUsername(),
+                    registerRequest.getFirstName(),
+                    registerRequest.getLastName(),
+                    keycloakUserId
+            );
 
             return UserInfo.builder()
+                    .id(keycloakUserId)
                     .username(registerRequest.getUsername())
                     .email(registerRequest.getEmail())
                     .firstName(registerRequest.getFirstName())
@@ -128,6 +181,14 @@ public class KeycloakService {
             
             if (e.getStatusCode() == HttpStatus.CONFLICT) {
                 throw new UserRegistrationException("Username or email already exists");
+            } else if (e.getStatusCode() == HttpStatus.FORBIDDEN) {
+                log.error("403 Forbidden - Client '{}' doesn't have admin permissions. " +
+                         "Please check Keycloak client configuration and service account roles.", clientId);
+                throw new UserRegistrationException("Registration failed: Insufficient permissions. " +
+                         "Please contact administrator.");
+            } else if (e.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                throw new UserRegistrationException("Registration failed: Authentication error. " +
+                         "Please check client credentials.");
             }
             throw new UserRegistrationException("User registration failed: " + e.getMessage());
         } catch (Exception e) {
@@ -153,11 +214,18 @@ public class KeycloakService {
                     .block();
 
             JsonNode jsonNode = objectMapper.readTree(response);
-            return jsonNode.get("access_token").asText();
+            String token = jsonNode.get("access_token").asText();
+            
+            log.debug("Successfully obtained admin token for client: {}", clientId);
+            return token;
 
+        } catch (WebClientResponseException e) {
+            log.error("Failed to get admin token - Status: {}, Response: {}", 
+                     e.getStatusCode(), e.getResponseBodyAsString());
+            throw new RuntimeException("Failed to get admin token: " + e.getMessage());
         } catch (Exception e) {
             log.error("Failed to get admin token", e);
-            throw new RuntimeException("Failed to get admin token");
+            throw new RuntimeException("Failed to get admin token: " + e.getMessage());
         }
     }
 
@@ -180,8 +248,13 @@ public class KeycloakService {
 
             JsonNode jsonNode = objectMapper.readTree(response);
 
+            String accessToken = jsonNode.get("access_token").asText();
+            
+            // Extract user info from token and sync with database
+            extractAndSyncUserFromToken(accessToken);
+
             return AuthResponse.builder()
-                    .accessToken(jsonNode.get("access_token").asText())
+                    .accessToken(accessToken)
                     .tokenType(jsonNode.get("token_type").asText())
                     .expiresIn(jsonNode.get("expires_in").asLong())
                     .refreshToken(jsonNode.has("refresh_token") ? jsonNode.get("refresh_token").asText() : refreshToken)
@@ -195,6 +268,49 @@ public class KeycloakService {
         } catch (Exception e) {
             log.error("Token refresh error", e);
             throw new AuthenticationException("Token refresh failed");
+        }
+    }
+
+    /**
+     * Find or create a user in the database by Keycloak ID
+     */
+    public User findOrCreateUserByKeycloakId(String keycloakId, String email, String username, String firstName, String lastName) {
+        return userService.findOrCreateByKeycloakId(keycloakId, email, username, firstName, lastName);
+    }
+
+    /**
+     * Update user's last login time
+     */
+    public void updateLastLogin(String keycloakId) {
+        userService.updateLastLogin(keycloakId);
+    }
+
+    /**
+     * Extract user information from JWT access token
+     */
+    private void extractAndSyncUserFromToken(String accessToken) {
+        try {
+            // JWT tokens have 3 parts separated by dots: header.payload.signature
+            String[] parts = accessToken.split("\\.");
+            if (parts.length >= 2) {
+                // Decode the payload (second part)
+                String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+                JsonNode payloadNode = objectMapper.readTree(payload);
+                
+                String keycloakId = payloadNode.get("sub").asText();
+                String email = payloadNode.has("email") ? payloadNode.get("email").asText() : null;
+                String username = payloadNode.has("preferred_username") ? payloadNode.get("preferred_username").asText() : email;
+                String firstName = payloadNode.has("given_name") ? payloadNode.get("given_name").asText() : null;
+                String lastName = payloadNode.has("family_name") ? payloadNode.get("family_name").asText() : null;
+                
+                // Find or create user in our database
+                if (keycloakId != null) {
+                    findOrCreateUserByKeycloakId(keycloakId, email, username, firstName, lastName);
+                    updateLastLogin(keycloakId);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract user info from JWT token", e);
         }
     }
 }

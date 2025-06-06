@@ -30,7 +30,7 @@ public class KeycloakConfig {
     }
 
     public String getTokenEndpoint() {
-        return String.format("%s/realms/%s/protocol/openid_connect/token", keycloakServerUrl, realm);
+        return String.format("%s/realms/%s/protocol/openid-connect/token", keycloakServerUrl, realm);
     }
 
     public String getUsersEndpoint() {

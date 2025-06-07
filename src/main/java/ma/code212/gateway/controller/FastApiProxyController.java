@@ -12,10 +12,12 @@ import ma.code212.gateway.dto.*;
 import ma.code212.gateway.enums.Sentiment;
 import ma.code212.gateway.model.Article;
 import ma.code212.gateway.model.Comment;
+import ma.code212.gateway.model.ScrapingJob;
 import ma.code212.gateway.model.SentimentAnalysisResult;
 import ma.code212.gateway.model.User;
 import ma.code212.gateway.service.ArticleService;
 import ma.code212.gateway.service.CommentService;
+import ma.code212.gateway.service.ScrapingJobService;
 import ma.code212.gateway.service.SentimentAnalysisResultService;
 import ma.code212.gateway.service.UserService;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,6 +52,7 @@ public class FastApiProxyController {
     private final CommentService commentService;
     private final SentimentAnalysisResultService sentimentAnalysisResultService;
     private final UserService userService;
+    private final ScrapingJobService scrapingJobService;
     private final ObjectMapper objectMapper;
 
     @Value("${external.fastapi.url}")
@@ -115,46 +118,76 @@ public class FastApiProxyController {
             }
             User user = userOpt.get();
             
+            // Create scraping job configuration
+            Map<String, Object> jobConfiguration = Map.of(
+                "title", request.getTitle(),
+                "userAgent", "Spring-Gateway-Bot",
+                "maxPages", 1,
+                "timeout", 30000
+            );
+            
+            // Create scraping job
+            ScrapingJob scrapingJob = scrapingJobService.createScrapingJob(user, request.getUrl(), jobConfiguration);
+            
+            // Start the scraping job
+            scrapingJob = scrapingJobService.startScrapingJob(scrapingJob.getId());
+            
             // Find or create article
             Article article = articleService.findOrCreateArticle(request.getUrl(), request.getTitle(), user);
             
-            // Call FastAPI to scrape comments
-            UrlInput urlInput = new UrlInput(request.getUrl());
-            ResponseEntity<String> fastApiResponse = proxyToFastApiForScraping("/scrape-comments", urlInput, HttpMethod.POST);
-            
-            // Parse FastAPI response
-            JsonNode responseJson = objectMapper.readTree(fastApiResponse.getBody());
-            JsonNode commentsArray = responseJson.get("comments");
-            int totalComments = responseJson.get("total_comments").asInt();
-            
-            // Create comment entities
-            List<String> commentTexts = objectMapper.convertValue(commentsArray, 
-                objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
-            
-            List<Comment> savedComments = commentService.createComments(commentTexts, article);
-            
-            // Update article total comments
-            articleService.updateTotalComments(article.getId(), totalComments);
-            
-            // Build response DTOs
-            ArticleDto articleDto = buildArticleDto(article, user);
-            List<CommentDto> commentDtos = savedComments.stream()
-                    .map(this::buildCommentDto)
-                    .toList();
-            
-            ScrapeCommentsResponse response = ScrapeCommentsResponse.builder()
-                    .status("success")
-                    .message("Comments scraped and saved successfully")
-                    .article(articleDto)
-                    .comments(commentDtos)
-                    .totalComments(totalComments)
-                    .timestamp(LocalDateTime.now().toString())
-                    .build();
-            
-            log.info("Successfully scraped and saved {} comments for article ID: {}", 
-                savedComments.size(), article.getId());
-            
-            return ResponseEntity.ok(response);
+            try {
+                // Call FastAPI to scrape comments
+                UrlInput urlInput = new UrlInput(request.getUrl());
+                ResponseEntity<String> fastApiResponse = proxyToFastApiForScraping("/scrape-comments", urlInput, HttpMethod.POST);
+                
+                // Parse FastAPI response
+                JsonNode responseJson = objectMapper.readTree(fastApiResponse.getBody());
+                JsonNode commentsArray = responseJson.get("comments");
+                int totalComments = responseJson.get("total_comments").asInt();
+                
+                // Create comment entities
+                List<String> commentTexts = objectMapper.convertValue(commentsArray, 
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+                
+                List<Comment> savedComments = commentService.createComments(commentTexts, article);
+                
+                // Update article total comments
+                articleService.updateTotalComments(article.getId(), totalComments);
+                
+                // Complete the scraping job successfully
+                scrapingJob = scrapingJobService.completeScrapingJob(
+                    scrapingJob.getId(), 
+                    1, // pages scraped
+                    savedComments.size() // comments found
+                );
+                
+                // Build response DTOs
+                ArticleDto articleDto = buildArticleDto(article, user);
+                List<CommentDto> commentDtos = savedComments.stream()
+                        .map(this::buildCommentDto)
+                        .toList();
+                ScrapingJobDto scrapingJobDto = buildScrapingJobDto(scrapingJob, user);
+                
+                ScrapeCommentsResponse response = ScrapeCommentsResponse.builder()
+                        .status("success")
+                        .message("Comments scraped and saved successfully")
+                        .article(articleDto)
+                        .comments(commentDtos)
+                        .totalComments(totalComments)
+                        .scrapingJob(scrapingJobDto)
+                        .timestamp(LocalDateTime.now().toString())
+                        .build();
+                
+                log.info("Successfully scraped and saved {} comments for article ID: {}, job ID: {}", 
+                    savedComments.size(), article.getId(), scrapingJob.getId());
+                
+                return ResponseEntity.ok(response);
+                
+            } catch (Exception scrapingException) {
+                // Fail the scraping job on error
+                scrapingJob = scrapingJobService.failScrapingJob(scrapingJob.getId(), scrapingException.getMessage());
+                throw scrapingException;
+            }
             
         } catch (Exception e) {
             log.error("Error scraping comments: {}", e.getMessage(), e);
@@ -375,6 +408,32 @@ public class FastApiProxyController {
                 .neutralScore(result.getNeutralScore())
                 .processedAt(result.getProcessedAt())
                 .createdAt(result.getCreatedAt())
+                .build();
+    }
+
+    private ScrapingJobDto buildScrapingJobDto(ScrapingJob scrapingJob, User user) {
+        UserDto userDto = UserDto.builder()
+                .id(user.getId())
+                .keycloakId(user.getKeycloakId())
+                .username(user.getUsername())
+                .email(user.getEmail())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .build();
+        
+        return ScrapingJobDto.builder()
+                .id(scrapingJob.getId())
+                .user(userDto)
+                .status(scrapingJob.getStatus())
+                .startTime(scrapingJob.getStartTime())
+                .endTime(scrapingJob.getEndTime())
+                .targetUrl(scrapingJob.getTargetUrl())
+                .pagesScraped(scrapingJob.getPagesScraped())
+                .commentsFound(scrapingJob.getCommentsFound())
+                .errors(scrapingJob.getErrors())
+                .configuration(scrapingJob.getConfiguration())
+                .createdAt(scrapingJob.getCreatedAt())
+                .updatedAt(scrapingJob.getUpdatedAt())
                 .build();
     }
 

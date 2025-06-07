@@ -17,5 +17,6 @@ public class ScrapeCommentsResponse {
     private ArticleDto article;
     private List<CommentDto> comments;
     private int totalComments;
+    private ScrapingJobDto scrapingJob;
     private String timestamp;
 }

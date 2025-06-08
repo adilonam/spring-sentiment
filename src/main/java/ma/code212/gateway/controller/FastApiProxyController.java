@@ -18,6 +18,7 @@ import ma.code212.gateway.model.User;
 import ma.code212.gateway.service.ArticleService;
 import ma.code212.gateway.service.CommentService;
 import ma.code212.gateway.service.ScrapingJobService;
+import ma.code212.gateway.service.ScrapingCacheService;
 import ma.code212.gateway.service.SentimentAnalysisResultService;
 import ma.code212.gateway.service.UserService;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,6 +36,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,6 +55,7 @@ public class FastApiProxyController {
     private final SentimentAnalysisResultService sentimentAnalysisResultService;
     private final UserService userService;
     private final ScrapingJobService scrapingJobService;
+    private final ScrapingCacheService scrapingCacheService;
     private final ObjectMapper objectMapper;
 
     @Value("${external.fastapi.url}")
@@ -136,30 +139,59 @@ public class FastApiProxyController {
             Article article = articleService.findOrCreateArticle(request.getUrl(), request.getTitle(), user);
             
             try {
-                // Call FastAPI to scrape comments
-                UrlInput urlInput = new UrlInput(request.getUrl());
-                ResponseEntity<String> fastApiResponse = proxyToFastApiForScraping("/scrape-comments", urlInput, HttpMethod.POST);
+                // Check cache first
+                ScrapingCacheService.ScrapedCommentsCache cachedComments = scrapingCacheService.getCachedComments(request.getUrl());
                 
-                // Parse FastAPI response
-                JsonNode responseJson = objectMapper.readTree(fastApiResponse.getBody());
-                JsonNode commentsArray = responseJson.get("comments");
-                int totalComments = responseJson.get("total_comments").asInt();
+                List<String> commentTexts;
+                int totalComments;
                 
-                // Create comment entities
-                List<String> commentTexts = objectMapper.convertValue(commentsArray, 
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+                if (cachedComments != null) {
+                    // Use cached data
+                    log.info("Using cached comments for URL: {} - Found {} comments", 
+                            request.getUrl(), cachedComments.getComments().size());
+                    
+                    commentTexts = cachedComments.getComments();
+                    totalComments = cachedComments.getTotalComments();
+                    
+                    // Update scraping job to indicate cache was used
+                    scrapingJob = scrapingJobService.completeScrapingJob(
+                        scrapingJob.getId(), 
+                        1, // pages scraped (from cache)
+                        commentTexts.size() // comments found
+                    );
+                    
+                } else {
+                    // Cache miss - call FastAPI to scrape comments
+                    log.info("Cache miss for URL: {} - Calling FastAPI to scrape comments", request.getUrl());
+                    
+                    UrlInput urlInput = new UrlInput(request.getUrl());
+                    ResponseEntity<String> fastApiResponse = proxyToFastApiForScraping("/scrape-comments", urlInput, HttpMethod.POST);
+                    
+                    // Parse FastAPI response
+                    JsonNode responseJson = objectMapper.readTree(fastApiResponse.getBody());
+                    JsonNode commentsArray = responseJson.get("comments");
+                    totalComments = responseJson.get("total_comments").asInt();
+                    
+                    // Create comment entities
+                    commentTexts = objectMapper.convertValue(commentsArray, 
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+                    
+                    // Cache the scraped comments
+                    scrapingCacheService.cacheScrapedComments(request.getUrl(), commentTexts, totalComments);
+                    
+                    // Complete the scraping job successfully
+                    scrapingJob = scrapingJobService.completeScrapingJob(
+                        scrapingJob.getId(), 
+                        1, // pages scraped
+                        commentTexts.size() // comments found
+                    );
+                }
                 
+                // Create comment entities from the comment texts (either cached or freshly scraped)
                 List<Comment> savedComments = commentService.createComments(commentTexts, article);
                 
                 // Update article total comments
                 articleService.updateTotalComments(article.getId(), totalComments);
-                
-                // Complete the scraping job successfully
-                scrapingJob = scrapingJobService.completeScrapingJob(
-                    scrapingJob.getId(), 
-                    1, // pages scraped
-                    savedComments.size() // comments found
-                );
                 
                 // Build response DTOs
                 ArticleDto articleDto = buildArticleDto(article, user);
@@ -168,9 +200,13 @@ public class FastApiProxyController {
                         .toList();
                 ScrapingJobDto scrapingJobDto = buildScrapingJobDto(scrapingJob, user);
                 
+                // Check if data was from cache
+                boolean fromCache = cachedComments != null;
+                String cacheStatus = fromCache ? "from cache" : "freshly scraped";
+                
                 ScrapeCommentsResponse response = ScrapeCommentsResponse.builder()
                         .status("success")
-                        .message("Comments scraped and saved successfully")
+                        .message(String.format("Comments %s and saved successfully", cacheStatus))
                         .article(articleDto)
                         .comments(commentDtos)
                         .totalComments(totalComments)
@@ -178,8 +214,8 @@ public class FastApiProxyController {
                         .timestamp(LocalDateTime.now().toString())
                         .build();
                 
-                log.info("Successfully scraped and saved {} comments for article ID: {}, job ID: {}", 
-                    savedComments.size(), article.getId(), scrapingJob.getId());
+                log.info("Successfully processed {} comments for article ID: {}, job ID: {} ({})", 
+                    savedComments.size(), article.getId(), scrapingJob.getId(), cacheStatus);
                 
                 return ResponseEntity.ok(response);
                 
@@ -323,6 +359,97 @@ public class FastApiProxyController {
                     .message("Failed to analyze comment sentiment: " + e.getMessage())
                     .timestamp(LocalDateTime.now().toString())
                     .build();
+            
+            return ResponseEntity.internalServerError().body(errorResponse);
+        }
+    }
+
+    @DeleteMapping("/cache/clear")
+    @Operation(
+        summary = "Clear Scraping Cache", 
+        description = "Clears the cache for a specific URL",
+        responses = {
+            @ApiResponse(responseCode = "200", description = "Cache cleared successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid URL provided"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - Authentication required")
+        }
+    )
+    public ResponseEntity<Map<String, Object>> clearScrapingCache(
+            @RequestParam String url,
+            Authentication authentication) {
+        
+        try {
+            log.info("Clearing cache for URL: {}", url);
+            
+            scrapingCacheService.clearCache(url);
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "success");
+            response.put("message", "Cache cleared successfully for URL: " + url);
+            response.put("url", url);
+            response.put("timestamp", LocalDateTime.now().toString());
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Error clearing cache for URL: {}, Error: {}", url, e.getMessage(), e);
+            
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "Failed to clear cache: " + e.getMessage());
+            errorResponse.put("url", url);
+            errorResponse.put("timestamp", LocalDateTime.now().toString());
+            
+            return ResponseEntity.internalServerError().body(errorResponse);
+        }
+    }
+
+    @GetMapping("/cache/status")
+    @Operation(
+        summary = "Check Cache Status", 
+        description = "Checks if a URL is cached and returns cache information",
+        responses = {
+            @ApiResponse(responseCode = "200", description = "Cache status retrieved successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid URL provided"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - Authentication required")
+        }
+    )
+    public ResponseEntity<Map<String, Object>> getCacheStatus(
+            @RequestParam String url,
+            Authentication authentication) {
+        
+        try {
+            log.info("Checking cache status for URL: {}", url);
+            
+            boolean isCached = scrapingCacheService.isCached(url);
+            long remainingTtl = scrapingCacheService.getRemainingTtl(url);
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "success");
+            response.put("url", url);
+            response.put("isCached", isCached);
+            response.put("remainingTtlSeconds", remainingTtl);
+            response.put("timestamp", LocalDateTime.now().toString());
+            
+            if (isCached) {
+                ScrapingCacheService.ScrapedCommentsCache cachedData = scrapingCacheService.getCachedComments(url);
+                if (cachedData != null) {
+                    response.put("cachedCommentsCount", cachedData.getComments().size());
+                    response.put("totalComments", cachedData.getTotalComments());
+                    response.put("cacheTimestamp", cachedData.getTimestamp());
+                }
+            }
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            log.error("Error checking cache status for URL: {}, Error: {}", url, e.getMessage(), e);
+            
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "Failed to check cache status: " + e.getMessage());
+            errorResponse.put("url", url);
+            errorResponse.put("timestamp", LocalDateTime.now().toString());
             
             return ResponseEntity.internalServerError().body(errorResponse);
         }
